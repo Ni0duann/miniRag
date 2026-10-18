@@ -1,7 +1,5 @@
+import { chunkDocument } from './rag/chunk'
 import type { Doc, RetrievedChunk } from './types'
-
-const CHUNK_SIZE = 400
-const MAX_CHUNK_SIZE = 800
 
 const STOP_TERMS = new Set([
   '什么',
@@ -16,43 +14,6 @@ const STOP_TERMS = new Set([
   '是否',
   '可以',
 ])
-
-type Chunk = Omit<RetrievedChunk, 'score'>
-
-function chunkDocument(doc: Doc): Chunk[] {
-  const chunks: Chunk[] = []
-  let heading = '正文'
-  let buffer = ''
-
-  const flush = () => {
-    const text = buffer.trim()
-    buffer = ''
-    if (!text) return
-    chunks.push({
-      id: `${doc.id}-${chunks.length}`,
-      docId: doc.id,
-      docName: doc.name,
-      heading,
-      text,
-    })
-  }
-
-  for (const line of doc.content.split(/\r?\n/)) {
-    const match = /^#{1,6}\s+(.+)$/.exec(line)
-    if (match) {
-      flush()
-      heading = match[1].trim() || '正文'
-      continue
-    }
-
-    buffer += `${line}\n`
-    if (buffer.length >= CHUNK_SIZE && line.trim() === '') flush()
-    else if (buffer.length >= MAX_CHUNK_SIZE) flush()
-  }
-
-  flush()
-  return chunks
-}
 
 function tokenize(question: string): string[] {
   const lower = question.toLowerCase()
