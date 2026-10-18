@@ -75,7 +75,9 @@ function App() {
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
 
-      <footer className="foot">文件解析与检索均在浏览器本地完成，不会发送到服务器。</footer>
+      <footer className="foot">
+        文件解析、Embedding 与检索均在浏览器本地完成；配置生成模型后，仅问题与命中片段会直连你配置的 API。
+      </footer>
     </div>
   )
 }

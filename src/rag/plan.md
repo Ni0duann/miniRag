@@ -102,7 +102,13 @@ src/rag/
     与关键词通道（复用 `retrieve()`）各取 Top-10，RRF(k=60) 按块 id 融合取 Top-3
   - 降级路径：文档未建向量索引 / 模型加载或编码失败 → 纯关键词并如实提示原因（`mode: 'keyword'` + `reason`）
   - ChatPage：`send()` 改异步，检索中禁用发送按钮；来源卡片相关度按通道类型格式化（关键词整数 / RRF 小数 4 位）
-- [ ] **Step 5 LLM 生成**：`answer.ts` Prompt 组装 + SSE 流式渲染 + 引用卡片；设置面板存 API Key/Base URL
+- [x] **Step 5 LLM 生成**：`answer.ts` Prompt 组装 + SSE 流式渲染 + 引用卡片；设置面板存 API Key/Base URL
+  - `src/rag/answer.ts`：`LlmConfig` 读写 localStorage（`minirag.llm`）；`buildMessages()` 把 Top-K 片段按 `[n]` 编号拼进
+    user 消息 + system 指令（只依据上下文作答、引用编号、不足时直说）；`streamAnswer()` 浏览器直连 OpenAI 兼容
+    Chat Completions，`TextDecoderStream` 按空行分帧解析 SSE，`[DONE]`/AbortError 都算正常结束，失败一律走 onError 展示在气泡里
+  - ChatPage：设置面板（Base URL/API Key/模型名，默认 DeepSeek `https://api.deepseek.com/v1` + `deepseek-v4-flash`）；已配置且检索命中时逐 token 流式
+    渲染 + 闪烁光标 + 「停止」按钮（AbortController）；未配置保持 Step 4 仅检索模式；来源卡片加 `[n]` 编号对应引用
+  - 验证：mock SSE 服务实测流式渲染/结束/[1] 引用；无效 Key 打 DashScope 真实 401 透出正常（浏览器直连该 API 可达）
 - [ ] **Step 6 解析扩展**：pdf.js 懒加载解析 PDF；上传校验放宽到 .pdf
 - [ ] **Step 7 验证评测**：构造 10 条问答对，对比纯关键词 vs 混合检索命中率；检查断网重进后模型缓存命中、数据持久化不丢
 
