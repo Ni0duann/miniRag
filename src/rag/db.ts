@@ -128,6 +128,25 @@ export async function clearDocIndex(): Promise<void> {
 }
 
 /**
+ * 加载所有「已向量化的块」，块与向量按 id 关联。
+ * 千级块直接全量进内存做暴力余弦（<50ms），暂不需要 HNSW/分块加载。
+ */
+export async function loadChunksWithVectors(): Promise<
+  { chunk: RawChunk; vector: Float32Array }[]
+> {
+  const db = await openDb()
+  const tx = db.transaction([CHUNK_STORE, VECTOR_STORE], 'readonly')
+  const [chunks, vectors] = await Promise.all([
+    requestResult(tx.objectStore(CHUNK_STORE).getAll()),
+    requestResult(tx.objectStore(VECTOR_STORE).getAll()),
+  ])
+  const vectorById = new Map(vectors.map((record: VectorRecord) => [record.id, record.vector]))
+  return (chunks as RawChunk[])
+    .map((chunk) => ({ chunk, vector: vectorById.get(chunk.id) }))
+    .filter((entry): entry is { chunk: RawChunk; vector: Float32Array } => entry.vector !== undefined)
+}
+
+/**
  * 汇总每篇文档的索引覆盖情况。
  * 学习规模（千级块）直接 getAll 计数即可；真到万级再换成索引 count 查询。
  */

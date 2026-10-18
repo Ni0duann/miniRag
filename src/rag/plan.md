@@ -97,7 +97,11 @@ src/rag/
   - 新增文件：`src/rag/embed.ts`（主线程 Worker 封装+请求队列）、`src/rag/ingest.ts`（切块→存块→批量编码→全成才写向量）、
     `src/rag/worker/embedWorker.ts`（WebGPU→WASM 回退、64条/批、单批重试3次）、`scripts/fetch-model.mjs`
   - DB 升级到 v2：新增 `chunks`/`vectors` store（均带 docId 索引）；UploadPage 展示索引状态/进度条/重试，删除文档同步清索引
-- [ ] **Step 4 向量检索**：`search.ts` 余弦 Top-K + 现有 bigram RRF 融合；ChatPage 切换调用
+- [x] **Step 4 向量检索**：`search.ts` 余弦 Top-K + 现有 bigram RRF 融合；ChatPage 切换调用
+  - `src/rag/search.ts`：`hybridSearch(docs, question)` 向量通道（`loadChunksWithVectors` + `embedQuery`，向量已归一化、点积即余弦）
+    与关键词通道（复用 `retrieve()`）各取 Top-10，RRF(k=60) 按块 id 融合取 Top-3
+  - 降级路径：文档未建向量索引 / 模型加载或编码失败 → 纯关键词并如实提示原因（`mode: 'keyword'` + `reason`）
+  - ChatPage：`send()` 改异步，检索中禁用发送按钮；来源卡片相关度按通道类型格式化（关键词整数 / RRF 小数 4 位）
 - [ ] **Step 5 LLM 生成**：`answer.ts` Prompt 组装 + SSE 流式渲染 + 引用卡片；设置面板存 API Key/Base URL
 - [ ] **Step 6 解析扩展**：pdf.js 懒加载解析 PDF；上传校验放宽到 .pdf
 - [ ] **Step 7 验证评测**：构造 10 条问答对，对比纯关键词 vs 混合检索命中率；检查断网重进后模型缓存命中、数据持久化不丢
