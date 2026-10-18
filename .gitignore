@@ -22,3 +22,7 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# pdf.js 资源（postinstall 从 node_modules 拷贝）
+public/cmaps
+public/standard_fonts

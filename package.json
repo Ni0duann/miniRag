@@ -6,10 +6,12 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "postinstall": "node -e \"const fs=require('fs');for(const d of ['cmaps','standard_fonts'])fs.cpSync('node_modules/pdfjs-dist/'+d,'public/'+d,{recursive:true})\"",
     "lint": "oxlint",
     "preview": "vite preview"
   },
   "dependencies": {
+    "pdfjs-dist": "^6.4.299",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "react-router-dom": "^7.18.4"

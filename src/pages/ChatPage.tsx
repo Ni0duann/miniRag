@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react'
 import { Link } from 'react-router-dom'
 import { retrieve } from '../retrieval'
+import { fileBadge } from '../docs'
 import type { ChatMessage, Doc } from '../types'
 
 type Props = {
@@ -41,7 +42,7 @@ function ChatPage({ docs, messages, setMessages }: Props) {
     const results = retrieve(docs, question)
     let answer: string
     if (docs.length === 0) {
-      answer = '还没有可检索的文档，请先在「文档」页上传 Markdown 文件。'
+      answer = '还没有可检索的文档，请先在「文档」页上传文件。'
     } else if (results.length === 0) {
       answer = '没有在已上传的文档中找到相关内容，试试换个关键词。'
     } else {
@@ -74,7 +75,7 @@ function ChatPage({ docs, messages, setMessages }: Props) {
               <span className="preview-icon">
                 <ChatIcon />
               </span>
-              <p>输入问题，我会从已上传的 Markdown 文档中查找相关片段。</p>
+              <p>输入问题，我会从已上传的文档中查找相关片段。</p>
               {docs.length === 0 && (
                 <Link to="/" className="link-btn">
                   先上传文档
@@ -90,7 +91,7 @@ function ChatPage({ docs, messages, setMessages }: Props) {
                     {message.sources.map((source) => (
                       <li key={source.id} className="source">
                         <div className="source-head">
-                          <span className="md-badge">MD</span>
+                          <span className="md-badge">{fileBadge(source.docName)}</span>
                           <span className="source-name">{source.docName}</span>
                           {source.heading !== '正文' && (
                             <span className="source-heading">· {source.heading}</span>

@@ -1,5 +1,6 @@
 import { useRef, useState, type Dispatch, type SetStateAction } from 'react'
-import { formatSize, isMarkdown, MAX_FILE_SIZE } from '../docs'
+import { fileBadge, formatSize, isSupportedDoc, MAX_FILE_SIZE } from '../docs'
+import { parseFile } from '../rag/parse'
 import type { Doc } from '../types'
 
 type Props = {
@@ -47,6 +48,8 @@ function UploadPage({ docs, setDocs }: Props) {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [isDragging, setIsDragging] = useState(false)
   const [errors, setErrors] = useState<string[]>([])
+  // PDF 解析在页面里跑，大文件可能耗时数秒，用 busy 禁用入口并给出反馈
+  const [busy, setBusy] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
 
   const selectedDoc = docs.find((doc) => doc.id === selectedId) ?? null
@@ -54,13 +57,19 @@ function UploadPage({ docs, setDocs }: Props) {
 
   async function addFiles(files: File[]) {
     if (files.length === 0) return
+    // 解析是串行的，忙时新选的文件若不提示会凭空消失
+    if (busy) {
+      setErrors(['上一个文件还在解析中，请等它完成后再添加。'])
+      return
+    }
 
+    setBusy(true)
     const problems: string[] = []
     const additions: Doc[] = []
 
     for (const file of files) {
-      if (!isMarkdown(file.name)) {
-        problems.push(`${file.name}：仅支持 .md / .markdown 文件`)
+      if (!isSupportedDoc(file.name)) {
+        problems.push(`${file.name}：仅支持 .md / .txt / .pdf 文件`)
         continue
       }
       if (file.size > MAX_FILE_SIZE) {
@@ -68,12 +77,7 @@ function UploadPage({ docs, setDocs }: Props) {
         continue
       }
 
-      const content = await file.text()
-      if (!content.trim()) {
-        problems.push(`${file.name}：文件内容为空`)
-        continue
-      }
-
+      // 重复检查放在解析前：能跳过就省去一次 PDF 全文解析
       const duplicated =
         docs.some((doc) => doc.name === file.name && doc.size === file.size) ||
         additions.some((doc) => doc.name === file.name && doc.size === file.size)
@@ -82,14 +86,25 @@ function UploadPage({ docs, setDocs }: Props) {
         continue
       }
 
-      additions.push({
-        id: crypto.randomUUID(),
-        name: file.name,
-        size: file.size,
-        content,
-      })
+      try {
+        const { content } = await parseFile(file)
+        if (!content.trim()) {
+          problems.push(`${file.name}：文件内容为空`)
+          continue
+        }
+
+        additions.push({
+          id: crypto.randomUUID(),
+          name: file.name,
+          size: file.size,
+          content,
+        })
+      } catch (error) {
+        problems.push(`${file.name}：${error instanceof Error ? error.message : '解析失败'}`)
+      }
     }
 
+    setBusy(false)
     setErrors(problems)
     if (additions.length > 0) {
       setDocs((prev) => [...additions, ...prev])
@@ -114,14 +129,15 @@ function UploadPage({ docs, setDocs }: Props) {
   return (
     <>
       <div className="header">
-        <h1>上传 Markdown 文档</h1>
-        <p className="subtitle">支持拖拽或点击选择，上传后可直接预览 Markdown 原文。</p>
+        <h1>上传文档</h1>
+        <p className="subtitle">支持 Markdown / 纯文本 / PDF，拖拽或点击选择，上传后可直接预览解析出的文本。</p>
       </div>
 
       <main className="layout">
         <section className="panel">
           <button
             type="button"
+            disabled={busy}
             className={`dropzone${isDragging ? ' is-dragging' : ''}`}
             onClick={() => inputRef.current?.click()}
             onDragOver={(event) => {
@@ -142,14 +158,14 @@ function UploadPage({ docs, setDocs }: Props) {
               <UploadIcon />
             </span>
             <span className="dropzone-title">
-              {isDragging ? '松开即可添加文件' : '拖拽 .md 文件到这里'}
+              {busy ? '解析中…' : isDragging ? '松开即可添加文件' : '拖拽文件到这里'}
             </span>
-            <span className="dropzone-hint">或点击选择文件 · 支持 .md / .markdown，可多选</span>
+            <span className="dropzone-hint">或点击选择文件 · 支持 .md / .txt / .pdf，可多选</span>
           </button>
           <input
             ref={inputRef}
             type="file"
-            accept=".md,.markdown,text/markdown"
+            accept=".md,.markdown,.txt,.pdf"
             multiple
             hidden
             onChange={(event) => {
@@ -201,7 +217,7 @@ function UploadPage({ docs, setDocs }: Props) {
                     onClick={() => setSelectedId(doc.id)}
                     title={doc.name}
                   >
-                    <span className="md-badge">MD</span>
+                    <span className="md-badge">{fileBadge(doc.name)}</span>
                     <span className="doc-info">
                       <span className="doc-name">{doc.name}</span>
                       <span className="doc-meta">
