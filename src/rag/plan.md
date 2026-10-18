@@ -109,8 +109,15 @@ src/rag/
   - ChatPage：设置面板（Base URL/API Key/模型名，默认 DeepSeek `https://api.deepseek.com/v1` + `deepseek-v4-flash`）；已配置且检索命中时逐 token 流式
     渲染 + 闪烁光标 + 「停止」按钮（AbortController）；未配置保持 Step 4 仅检索模式；来源卡片加 `[n]` 编号对应引用
   - 验证：mock SSE 服务实测流式渲染/结束/[1] 引用；无效 Key 打 DashScope 真实 401 透出正常（浏览器直连该 API 可达）
-- [ ] **Step 6 解析扩展**：pdf.js 懒加载解析 PDF；上传校验放宽到 .pdf
-- [ ] **Step 7 验证评测**：构造 10 条问答对，对比纯关键词 vs 混合检索命中率；检查断网重进后模型缓存命中、数据持久化不丢
+- [x] **Step 6 解析扩展**：pdf.js 懒加载解析 PDF；上传校验放宽到 .pdf
+  - 实际早在 `0bde828` 已实现（parse.ts 按扩展名分发、pdfjs-dist 动态 import、y 坐标聚类还原行/段、cmaps 中文映射、GBK 回退）；
+    2026-10-19 端到端补验：手写最小合法 PDF 上传 → 解析出 318 字符（空行分段保留）→ 自动切块 1 块 + embedding 索引 → 混合检索 Top-1 命中该 PDF 块
+- [x] **Step 7 验证评测**：构造 10 条问答对，对比纯关键词 vs 混合检索命中率；检查断网重进后模型缓存命中、数据持久化不丢
+  - 评测集：10 条中文问题对 2 篇已索引文档（README.md 英文 9 块 + minirag-test.md 中文 3 块），命中判定为期望块进入 Top-3
+  - 结果：**纯关键词 Top-3 命中 8/10**（漏 2 条：中文问 vs 英文语料的跨语言语义题，词面零重叠）；**混合检索 10/10**，向量通道把 2 条全部捞回；Top-1 关键词 7/10 → 混合 8/10
+  - 持久化：页面 reload 后 docs=2 / chunks=12 / vectors=12 完整恢复
+  - 模型重载：reload 后首次 `embedQuery`（含 Worker 创建 + 模型加载 + 编码）1.2s 完成，同源 `public/models` 由本地磁盘直接命中
+  - 断网说明：改同源托管后"断网重进"退化为页面本身不可达（GitHub Pages 无 Service Worker 离线缓存）；如需真离线，后续加 SW 预缓存，不影响当前链路
 
 ## 风险与回退
 
