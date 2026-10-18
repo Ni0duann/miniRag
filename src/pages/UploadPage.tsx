@@ -1,12 +1,39 @@
-import { useRef, useState, type Dispatch, type SetStateAction } from 'react'
+import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react'
 import { fileBadge, formatSize, isSupportedDoc, MAX_FILE_SIZE } from '../docs'
-import { clearDocs, deleteDoc, putDocs } from '../rag/db'
+import {
+  clearDocIndex,
+  clearDocs,
+  deleteDoc,
+  deleteDocIndex,
+  loadIndexSummary,
+  putDocs,
+} from '../rag/db'
+import { indexDocument } from '../rag/ingest'
 import { parseFile } from '../rag/parse'
+import type { IndexSummary } from '../rag/types'
 import type { Doc } from '../types'
 
 type Props = {
   docs: Doc[]
   setDocs: Dispatch<SetStateAction<Doc[]>>
+}
+
+/** 单篇文档在当前会话内的索引状态（持久状态由 summary 兜底） */
+type DocIndexState =
+  | { phase: 'idle' }
+  | { phase: 'queued' }
+  | { phase: 'loading' }
+  | { phase: 'embedding'; done: number; total: number }
+  | { phase: 'done'; chunks: number }
+  | { phase: 'error'; message: string }
+
+const INDEX_LABEL: Record<DocIndexState['phase'], string> = {
+  idle: '未索引',
+  queued: '排队中…',
+  loading: '加载模型…',
+  embedding: '嵌入中',
+  done: '已索引',
+  error: '索引失败',
 }
 
 function UploadIcon() {
@@ -53,8 +80,87 @@ function UploadPage({ docs, setDocs }: Props) {
   const [busy, setBusy] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
 
+  // 索引状态：statuses 是会话内的实时状态，summary 是刷新后从 DB 恢复的覆盖情况
+  const [statuses, setStatuses] = useState<Record<string, DocIndexState>>({})
+  const statusesRef = useRef<Record<string, DocIndexState>>({})
+  const [summary, setSummary] = useState<IndexSummary>({})
+  const queueRef = useRef<Doc[]>([])
+  const queuedIdsRef = useRef(new Set<string>())
+  const runningRef = useRef(false)
+
+  useEffect(() => {
+    // IDB 降级为内存模式时读不到 summary，保持空对象即可（UI 全部显示未索引）
+    loadIndexSummary()
+      .then(setSummary)
+      .catch(() => {})
+  }, [])
+
+  function setDocStatus(id: string, state: DocIndexState) {
+    statusesRef.current = { ...statusesRef.current, [id]: state }
+    setStatuses(statusesRef.current)
+  }
+
+  function clearDocStatus(id: string) {
+    const next = { ...statusesRef.current }
+    delete next[id]
+    statusesRef.current = next
+    setStatuses(next)
+  }
+
+  /** 当前索引状态：会话内实时状态优先，其次看 DB 里向量是否覆盖了全部块 */
+  function stateOf(docId: string): DocIndexState {
+    const live = statuses[docId]
+    if (live) return live
+    const counts = summary[docId]
+    if (counts && counts.chunks > 0 && counts.vectors >= counts.chunks) {
+      return { phase: 'done', chunks: counts.chunks }
+    }
+    return { phase: 'idle' }
+  }
+
+  // 队列串行索引：模型只有一个 Worker，并发编码会让进度条数字互相穿插
+  function enqueueIndex(targets: Doc[]) {
+    const additions = targets.filter((doc) => !queuedIdsRef.current.has(doc.id))
+    if (additions.length === 0) return
+    additions.forEach((doc) => {
+      queuedIdsRef.current.add(doc.id)
+      setDocStatus(doc.id, { phase: 'queued' })
+    })
+    queueRef.current.push(...additions)
+    void drainQueue()
+  }
+
+  async function drainQueue() {
+    if (runningRef.current) return
+    runningRef.current = true
+    while (queueRef.current.length > 0) {
+      const doc = queueRef.current.shift()
+      if (!doc) continue
+      queuedIdsRef.current.delete(doc.id)
+      try {
+        const chunkCount = await indexDocument(doc, (progress) => {
+          setDocStatus(
+            doc.id,
+            progress.phase === 'loading'
+              ? { phase: 'loading' }
+              : { phase: 'embedding', done: progress.done, total: progress.total },
+          )
+        })
+        setDocStatus(doc.id, { phase: 'done', chunks: chunkCount })
+        setSummary((prev) => ({ ...prev, [doc.id]: { chunks: chunkCount, vectors: chunkCount } }))
+      } catch (error) {
+        setDocStatus(doc.id, {
+          phase: 'error',
+          message: error instanceof Error ? error.message : 'Embedding 失败',
+        })
+      }
+    }
+    runningRef.current = false
+  }
+
   const selectedDoc = docs.find((doc) => doc.id === selectedId) ?? null
   const totalChars = docs.reduce((sum, doc) => sum + doc.content.length, 0)
+  const pendingDocs = docs.filter((doc) => stateOf(doc.id).phase === 'idle')
 
   async function addFiles(files: File[]) {
     if (files.length === 0) return
@@ -118,6 +224,8 @@ function UploadPage({ docs, setDocs }: Props) {
         const reason = error instanceof Error ? error.message : '未知错误'
         setErrors((prev) => [...prev, `保存到本地存储失败（${reason}），新上传的文档刷新后会丢失。`])
       }
+      // 上传即索引：异步排队跑 embedding，不阻塞后续操作
+      enqueueIndex(additions)
     }
   }
 
@@ -127,9 +235,19 @@ function UploadPage({ docs, setDocs }: Props) {
       const next = docs.find((doc) => doc.id !== id) ?? null
       setSelectedId(next?.id ?? null)
     }
+    // 索引队列里还排着的话要撤掉，否则会给已删除的文档白跑一次 embedding
+    queueRef.current = queueRef.current.filter((doc) => doc.id !== id)
+    queuedIdsRef.current.delete(id)
+    clearDocStatus(id)
+    setSummary((prev) => {
+      const next = { ...prev }
+      delete next[id]
+      return next
+    })
     // 内存删了但库里没删，下次启动会「复活」，所以失败必须提示
     try {
       await deleteDoc(id)
+      await deleteDocIndex(id)
     } catch (error) {
       const reason = error instanceof Error ? error.message : '未知错误'
       setErrors((prev) => [...prev, `本地存储删除失败（${reason}），该文档刷新后会重新出现。`])
@@ -140,8 +258,14 @@ function UploadPage({ docs, setDocs }: Props) {
     setDocs([])
     setSelectedId(null)
     setErrors([])
+    queueRef.current = []
+    queuedIdsRef.current.clear()
+    statusesRef.current = {}
+    setStatuses({})
+    setSummary({})
     try {
       await clearDocs()
+      await clearDocIndex()
     } catch (error) {
       const reason = error instanceof Error ? error.message : '未知错误'
       setErrors((prev) => [...prev, `本地存储清空失败（${reason}），文档列表刷新后会重新出现。`])
@@ -220,43 +344,80 @@ function UploadPage({ docs, setDocs }: Props) {
               文档列表
               <span className="count">{docs.length}</span>
             </h2>
-            {docs.length > 0 && (
-              <button type="button" className="ghost" onClick={() => void clearAll()}>
-                清空
-              </button>
-            )}
+            <span className="list-actions">
+              {pendingDocs.length > 0 && (
+                <button type="button" className="ghost" onClick={() => enqueueIndex(pendingDocs)}>
+                  索引未处理（{pendingDocs.length}）
+                </button>
+              )}
+              {docs.length > 0 && (
+                <button type="button" className="ghost" onClick={() => void clearAll()}>
+                  清空
+                </button>
+              )}
+            </span>
           </div>
 
           {docs.length === 0 ? (
             <p className="empty">还没有上传文档</p>
           ) : (
             <ul className="doc-list">
-              {docs.map((doc) => (
-                <li key={doc.id} className={doc.id === selectedId ? 'selected' : ''}>
-                  <button
-                    type="button"
-                    className="doc-main"
-                    onClick={() => setSelectedId(doc.id)}
-                    title={doc.name}
-                  >
-                    <span className="md-badge">{fileBadge(doc.name)}</span>
-                    <span className="doc-info">
-                      <span className="doc-name">{doc.name}</span>
-                      <span className="doc-meta">
-                        {formatSize(doc.size)} · {doc.content.length.toLocaleString()} 字符
+              {docs.map((doc) => {
+                const st = stateOf(doc.id)
+                return (
+                  <li key={doc.id} className={doc.id === selectedId ? 'selected' : ''}>
+                    <button
+                      type="button"
+                      className="doc-main"
+                      onClick={() => setSelectedId(doc.id)}
+                      title={st.phase === 'error' ? st.message : doc.name}
+                    >
+                      <span className="md-badge">{fileBadge(doc.name)}</span>
+                      <span className="doc-info">
+                        <span className="doc-name">{doc.name}</span>
+                        <span className="doc-meta">
+                          {formatSize(doc.size)} · {doc.content.length.toLocaleString()} 字符
+                        </span>
+                        <span className={`index-status is-${st.phase}`}>
+                          {st.phase === 'embedding'
+                            ? `嵌入中 ${st.done}/${st.total}`
+                            : st.phase === 'done'
+                              ? `已索引 · ${st.chunks} 块`
+                              : st.phase === 'error'
+                                ? `索引失败：${st.message}`
+                                : INDEX_LABEL[st.phase]}
+                        </span>
+                        {st.phase === 'embedding' && st.total > 0 && (
+                          <span className="index-bar">
+                            <span
+                              className="index-bar-fill"
+                              style={{ width: `${Math.round((st.done / st.total) * 100)}%` }}
+                            />
+                          </span>
+                        )}
                       </span>
-                    </span>
-                  </button>
-                  <button
-                    type="button"
-                    className="remove"
-                    onClick={() => void removeDoc(doc.id)}
-                    aria-label={`移除 ${doc.name}`}
-                  >
-                    ×
-                  </button>
-                </li>
-              ))}
+                    </button>
+                    {(st.phase === 'idle' || st.phase === 'error') && (
+                      <button
+                        type="button"
+                        className="index-btn"
+                        onClick={() => enqueueIndex([doc])}
+                        title={st.phase === 'error' ? '重新索引该文档' : '生成该文档的向量索引'}
+                      >
+                        {st.phase === 'error' ? '重试' : '索引'}
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      className="remove"
+                      onClick={() => void removeDoc(doc.id)}
+                      aria-label={`移除 ${doc.name}`}
+                    >
+                      ×
+                    </button>
+                  </li>
+                )
+              })}
             </ul>
           )}
 

@@ -26,3 +26,6 @@ dist-ssr
 # pdf.js 资源（postinstall 从 node_modules 拷贝）
 public/cmaps
 public/standard_fonts
+
+# ONNX 模型权重（pnpm model:get 下载，~25MB 不进 git，CI 构建时拉取）
+public/models

@@ -49,6 +49,11 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
+      # 模型不随 git 提交，构建前从 HF 拉进 public/models/，让 Pages 产物自带权重
+      # （runner 可直连 huggingface.co，比默认镜像快；本地开发仍用 pnpm model:get）
+      - run: pnpm model:get
+        env:
+          MODEL_BASE: https://huggingface.co
       - run: pnpm build
       # Pages 没有 SPA 回退，用 index.html 副本兜住 /chat 这类深链接刷新
       - run: cp dist/index.html dist/404.html

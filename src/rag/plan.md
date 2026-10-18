@@ -10,7 +10,7 @@
 
 | 环节 | 方案 | 理由 |
 |------|------|------|
-| Embedding 推理 | `@huggingface/transformers`（transformers.js v3） | 浏览器跑 ONNX 小模型，如 `BAAI/bge-small-zh-v1.5`（q8 量化约 100MB，支持中文） |
+| Embedding 推理 | `@huggingface/transformers`（transformers.js v4） | 浏览器跑 ONNX 小模型 `Xenova/bge-small-zh-v1.5`（q8 约 24MB，支持中文）；权重经 `pnpm model:get` 放 `public/models/` 同源加载，规避 CORS |
 | 执行后端 | WebGPU 优先，回退 WASM；推理放 Web Worker | 不阻塞 UI；模型文件走 CDN + Cache API 缓存 |
 | 向量存储与检索 | Float32 向量存 IndexedDB；检索时加载内存做余弦相似度 | 千级块暴力计算足够快（<50ms），先不引入 HNSW |
 | 持久化 | IndexedDB（`docs`/`chunks`/`vectors` 三个 object store） | 刷新后文档不丢；单库可存几百 MB |
@@ -90,8 +90,13 @@ src/rag/
   - `db.ts` 零依赖手写封装，API：`loadDocs()` / `putDocs(docs)` / `deleteDoc(id)` / `clearDocs()`；`open()` 缓存 Promise 保证单连接
   - 写入策略：React state 仍是单一数据源，每个变更点（上传追加、删除、清空）成功后 write-through 落库；App 挂载时 `useEffect` 从 DB 恢复
   - 失败处理：IDB 打不开（隐私模式等）→ 页面顶部横幅提示，降级为纯内存模式（现有行为）；单条写库失败 → 追加到上传错误列表
-- [ ] **Step 2 切块迁移**：`chunk.ts` 抽取现有 chunkDocument，加 50~100 字重叠；上传时存 chunks
-- [ ] **Step 3 Embedding Worker**：接入 transformers.js + bge-small-zh-v1.5-q8，Worker 批量 encode + 进度回报；向量写入 DB
+- [x] **Step 2 切块迁移**：`chunk.ts` 抽取现有 chunkDocument，加 50~100 字重叠；上传时存 chunks（随 Step 3 的 ingest 管线落库）
+- [x] **Step 3 Embedding Worker**：接入 transformers.js + bge-small-zh-v1.5(q8)，Worker 批量 encode + 进度回报；向量写入 DB
+  - 实际落地与原计划不同：模型权重不再从 HF CDN 远程拉取（hf-mirror 无 CORS 头、huggingface.co 国内直连不通），
+    改为 `pnpm model:get` 下载到 `public/models/`，浏览器**同源加载**；CI 构建时同样拉取，GitHub Pages 产物自带 ~24MB 模型（不进 git）
+  - 新增文件：`src/rag/embed.ts`（主线程 Worker 封装+请求队列）、`src/rag/ingest.ts`（切块→存块→批量编码→全成才写向量）、
+    `src/rag/worker/embedWorker.ts`（WebGPU→WASM 回退、64条/批、单批重试3次）、`scripts/fetch-model.mjs`
+  - DB 升级到 v2：新增 `chunks`/`vectors` store（均带 docId 索引）；UploadPage 展示索引状态/进度条/重试，删除文档同步清索引
 - [ ] **Step 4 向量检索**：`search.ts` 余弦 Top-K + 现有 bigram RRF 融合；ChatPage 切换调用
 - [ ] **Step 5 LLM 生成**：`answer.ts` Prompt 组装 + SSE 流式渲染 + 引用卡片；设置面板存 API Key/Base URL
 - [ ] **Step 6 解析扩展**：pdf.js 懒加载解析 PDF；上传校验放宽到 .pdf
