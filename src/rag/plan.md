@@ -84,7 +84,12 @@ src/rag/
 
 ## 实施步骤
 
-- [ ] **Step 1 持久化**：`db.ts` IndexedDB 封装；App 启动从 DB 恢复 docs，上传/删除同步落库（先不涉向量）
+- [x] **Step 1 持久化**：`db.ts` IndexedDB 封装；App 启动从 DB 恢复 docs，上传/删除同步落库（先不涉向量）
+  - 库与版本：`minirag` v1，只建 `docs` 一个 object store（keyPath `id`）；Step 2/3 需要 `chunks`/`vectors` 时再走 `onupgradeneeded` 版本升级，这是 IndexedDB 的标准演进方式
+  - `Doc` 加 `createdAt: number`：IDB 游标按 key（随机 UUID）排序，不保留插入顺序，靠 createdAt 恢复「最新在前」的列表顺序
+  - `db.ts` 零依赖手写封装，API：`loadDocs()` / `putDocs(docs)` / `deleteDoc(id)` / `clearDocs()`；`open()` 缓存 Promise 保证单连接
+  - 写入策略：React state 仍是单一数据源，每个变更点（上传追加、删除、清空）成功后 write-through 落库；App 挂载时 `useEffect` 从 DB 恢复
+  - 失败处理：IDB 打不开（隐私模式等）→ 页面顶部横幅提示，降级为纯内存模式（现有行为）；单条写库失败 → 追加到上传错误列表
 - [ ] **Step 2 切块迁移**：`chunk.ts` 抽取现有 chunkDocument，加 50~100 字重叠；上传时存 chunks
 - [ ] **Step 3 Embedding Worker**：接入 transformers.js + bge-small-zh-v1.5-q8，Worker 批量 encode + 进度回报；向量写入 DB
 - [ ] **Step 4 向量检索**：`search.ts` 余弦 Top-K + 现有 bigram RRF 融合；ChatPage 切换调用

@@ -1,5 +1,6 @@
 import { useRef, useState, type Dispatch, type SetStateAction } from 'react'
 import { fileBadge, formatSize, isSupportedDoc, MAX_FILE_SIZE } from '../docs'
+import { clearDocs, deleteDoc, putDocs } from '../rag/db'
 import { parseFile } from '../rag/parse'
 import type { Doc } from '../types'
 
@@ -98,6 +99,7 @@ function UploadPage({ docs, setDocs }: Props) {
           name: file.name,
           size: file.size,
           content,
+          createdAt: Date.now(),
         })
       } catch (error) {
         problems.push(`${file.name}：${error instanceof Error ? error.message : '解析失败'}`)
@@ -109,21 +111,41 @@ function UploadPage({ docs, setDocs }: Props) {
     if (additions.length > 0) {
       setDocs((prev) => [...additions, ...prev])
       setSelectedId((current) => current ?? additions[0].id)
+      // state 先行、落库兜底：写库失败不影响本次会话使用，但要告知刷新会丢
+      try {
+        await putDocs(additions)
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : '未知错误'
+        setErrors((prev) => [...prev, `保存到本地存储失败（${reason}），新上传的文档刷新后会丢失。`])
+      }
     }
   }
 
-  function removeDoc(id: string) {
+  async function removeDoc(id: string) {
     setDocs((prev) => prev.filter((doc) => doc.id !== id))
     if (selectedId === id) {
       const next = docs.find((doc) => doc.id !== id) ?? null
       setSelectedId(next?.id ?? null)
     }
+    // 内存删了但库里没删，下次启动会「复活」，所以失败必须提示
+    try {
+      await deleteDoc(id)
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : '未知错误'
+      setErrors((prev) => [...prev, `本地存储删除失败（${reason}），该文档刷新后会重新出现。`])
+    }
   }
 
-  function clearAll() {
+  async function clearAll() {
     setDocs([])
     setSelectedId(null)
     setErrors([])
+    try {
+      await clearDocs()
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : '未知错误'
+      setErrors((prev) => [...prev, `本地存储清空失败（${reason}），文档列表刷新后会重新出现。`])
+    }
   }
 
   return (
@@ -199,7 +221,7 @@ function UploadPage({ docs, setDocs }: Props) {
               <span className="count">{docs.length}</span>
             </h2>
             {docs.length > 0 && (
-              <button type="button" className="ghost" onClick={clearAll}>
+              <button type="button" className="ghost" onClick={() => void clearAll()}>
                 清空
               </button>
             )}
@@ -228,7 +250,7 @@ function UploadPage({ docs, setDocs }: Props) {
                   <button
                     type="button"
                     className="remove"
-                    onClick={() => removeDoc(doc.id)}
+                    onClick={() => void removeDoc(doc.id)}
                     aria-label={`移除 ${doc.name}`}
                   >
                     ×

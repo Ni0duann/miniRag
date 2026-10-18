@@ -3,6 +3,8 @@ export type Doc = {
   name: string
   size: number
   content: string
+  // IndexedDB 主键是 UUID，恢复列表时靠它还原「最新在前」的顺序
+  createdAt: number
 }
 
 export type RetrievedChunk = {
