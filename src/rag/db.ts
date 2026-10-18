@@ -1,11 +1,12 @@
-import type { Doc } from '../types'
+import type { ChatMessage, Doc } from '../types'
 import type { IndexSummary, RawChunk, VectorRecord } from './types'
 
 const DB_NAME = 'minirag'
-const DB_VERSION = 2
+const DB_VERSION = 3
 const DOC_STORE = 'docs'
 const CHUNK_STORE = 'chunks'
 const VECTOR_STORE = 'vectors'
+const MESSAGE_STORE = 'messages'
 
 let openPromise: Promise<IDBDatabase> | null = null
 
@@ -27,6 +28,10 @@ function openDb(): Promise<IDBDatabase> {
         if (!db.objectStoreNames.contains(VECTOR_STORE)) {
           const vectors = db.createObjectStore(VECTOR_STORE, { keyPath: 'id' })
           vectors.createIndex('docId', 'docId')
+        }
+        // v3：聊天记录落库，刷新后对话不丢
+        if (!db.objectStoreNames.contains(MESSAGE_STORE)) {
+          db.createObjectStore(MESSAGE_STORE, { keyPath: 'id' })
         }
       }
       request.onsuccess = () => resolve(request.result)
@@ -167,4 +172,25 @@ export async function loadIndexSummary(): Promise<IndexSummary> {
     summary[record.docId].vectors += 1
   }
   return summary
+}
+
+export async function loadMessages(): Promise<ChatMessage[]> {
+  const db = await openDb()
+  const rows = await requestResult(db.transaction(MESSAGE_STORE, 'readonly').objectStore(MESSAGE_STORE).getAll())
+  return (rows as ChatMessage[]).sort((a, b) => a.createdAt - b.createdAt)
+}
+
+/** 单条写入；put 按 id 覆盖，流式消息结束后用最终全文再 put 一次即可 */
+export async function putMessage(message: ChatMessage): Promise<void> {
+  const db = await openDb()
+  const tx = db.transaction(MESSAGE_STORE, 'readwrite')
+  tx.objectStore(MESSAGE_STORE).put(message)
+  await transactionDone(tx)
+}
+
+export async function clearMessages(): Promise<void> {
+  const db = await openDb()
+  const tx = db.transaction(MESSAGE_STORE, 'readwrite')
+  tx.objectStore(MESSAGE_STORE).clear()
+  await transactionDone(tx)
 }

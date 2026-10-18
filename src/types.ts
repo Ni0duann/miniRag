@@ -21,4 +21,6 @@ export type ChatMessage = {
   role: 'user' | 'assistant'
   text: string
   sources?: RetrievedChunk[]
+  // IDB 主键是随机 UUID 不保留插入顺序，靠 createdAt 恢复对话先后
+  createdAt: number
 }

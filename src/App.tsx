@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Navigate, NavLink, Route, Routes } from 'react-router-dom'
 import ChatPage from './pages/ChatPage'
 import UploadPage from './pages/UploadPage'
-import { loadDocs } from './rag/db'
+import { loadDocs, loadMessages } from './rag/db'
 import type { ChatMessage, Doc } from './types'
 import './App.css'
 
@@ -31,6 +31,13 @@ function App() {
     return () => {
       cancelled = true
     }
+  }, [])
+
+  useEffect(() => {
+    // 聊天记录恢复失败不阻塞页面：大不了从空对话开始
+    loadMessages()
+      .then((restored) => setMessages((prev) => (prev.length === 0 ? restored : prev)))
+      .catch(() => {})
   }, [])
 
   return (

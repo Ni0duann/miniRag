@@ -410,8 +410,9 @@
 }
 
 .chat-panel {
-  height: min(640px, calc(100svh - 320px));
-  min-height: 400px;
+  /* 高度跟随视口剩余空间，替代原先 640px 的矮框 */
+  height: calc(100svh - 300px);
+  min-height: 480px;
   padding: 0;
   gap: 0;
   overflow: hidden;
@@ -464,18 +465,19 @@
 .chat-msg.user {
   align-self: flex-end;
   align-items: flex-end;
+  max-width: 88%;
 }
 
 .chat-msg.assistant {
   align-self: flex-start;
-  max-width: 92%;
+  max-width: 96%;
 }
 
 .bubble {
   padding: 10px 14px;
   border-radius: 12px;
-  font-size: 14px;
-  line-height: 1.65;
+  font-size: 15px;
+  line-height: 1.7;
   white-space: pre-wrap;
 }
 
@@ -553,8 +555,8 @@
 
 .composer textarea {
   flex: 1;
-  min-height: 44px;
-  max-height: 120px;
+  min-height: 48px;
+  max-height: 200px;
   padding: 10px 12px;
   resize: none;
   border: 1px solid var(--border-strong);
@@ -624,7 +626,7 @@
   }
 
   .chat-panel {
-    height: min(560px, calc(100svh - 300px));
+    height: calc(100svh - 300px);
     min-height: 380px;
   }
 
@@ -774,4 +776,51 @@
   50% {
     opacity: 0;
   }
+}
+
+/* 对话体验优化：来源折叠 + 头部操作组 */
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sources-group {
+  width: 100%;
+}
+
+.sources-group summary {
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 7px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-soft);
+  list-style: none;
+}
+
+.sources-group summary::-webkit-details-marker {
+  display: none;
+}
+
+.sources-group summary::before {
+  content: '▸';
+  font-size: 10px;
+  transition: transform 0.15s ease;
+}
+
+.sources-group[open] summary::before {
+  transform: rotate(90deg);
+}
+
+.sources-group summary:hover {
+  background: var(--surface-muted);
+  color: var(--accent);
+}
+
+.sources-group[open] .sources {
+  margin-top: 8px;
 }

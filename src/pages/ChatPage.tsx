@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from 
 import { Link } from 'react-router-dom'
 import { hybridSearch } from '../rag/search'
 import { buildMessages, loadLlmConfig, saveLlmConfig, streamAnswer, type LlmConfig } from '../rag/answer'
+import { clearMessages, putMessage } from '../rag/db'
 import { fileBadge } from '../docs'
 import type { ChatMessage, Doc } from '../types'
 
@@ -64,7 +65,15 @@ function ChatPage({ docs, messages, setMessages }: Props) {
     if (!question || searching || generating) return
 
     setDraft('')
-    setMessages((prev) => [...prev, { id: crypto.randomUUID(), role: 'user', text: question }])
+    const userMessage: ChatMessage = {
+      id: crypto.randomUUID(),
+      role: 'user',
+      text: question,
+      createdAt: Date.now(),
+    }
+    setMessages((prev) => [...prev, userMessage])
+    // 写库失败只影响"刷新后是否还在"，不打断本次对话
+    void putMessage(userMessage).catch(() => {})
     setSearching(true)
 
     let retrievalAnswer = ''
@@ -89,32 +98,55 @@ function ChatPage({ docs, messages, setMessages }: Props) {
     }
 
     if (retrievalAnswer || !sources || sources.length === 0 || !config) {
-      setMessages((prev) => [
-        ...prev,
-        { id: crypto.randomUUID(), role: 'assistant', text: retrievalAnswer, sources },
-      ])
+      const message: ChatMessage = {
+        id: crypto.randomUUID(),
+        role: 'assistant',
+        text: retrievalAnswer,
+        sources,
+        createdAt: Date.now(),
+      }
+      setMessages((prev) => [...prev, message])
+      void putMessage(message).catch(() => {})
       return
     }
 
     // 检索命中且已配置模型：先落一条空的 assistant 消息，边收 delta 边填
     const assistantId = crypto.randomUUID()
+    const createdAt = Date.now()
     setMessages((prev) => [
       ...prev,
-      { id: assistantId, role: 'assistant', text: '', sources },
+      { id: assistantId, role: 'assistant', text: '', sources, createdAt },
     ])
     setGenerating(true)
     const controller = new AbortController()
     abortRef.current = controller
 
+    // 全文在本地累计，结束时一次性写库：逐 delta 落库会高频打 IndexedDB 且没有收益
+    let fullText = ''
+    const persistFinal = () => {
+      void putMessage({ id: assistantId, role: 'assistant', text: fullText, sources, createdAt }).catch(
+        () => {},
+      )
+    }
+
     await streamAnswer(
       config,
       buildMessages(question, sources),
       {
-        onDelta: (delta) => appendToMessage(assistantId, delta),
-        onDone: () => setGenerating(false),
-        onError: (error) => {
-          appendToMessage(assistantId, `\n\n（生成失败：${error.message}）`)
+        onDelta: (delta) => {
+          fullText += delta
+          appendToMessage(assistantId, delta)
+        },
+        onDone: () => {
           setGenerating(false)
+          persistFinal()
+        },
+        onError: (error) => {
+          const suffix = `\n\n（生成失败：${error.message}）`
+          fullText += suffix
+          appendToMessage(assistantId, suffix)
+          setGenerating(false)
+          persistFinal()
         },
       },
       controller.signal,
@@ -123,6 +155,11 @@ function ChatPage({ docs, messages, setMessages }: Props) {
 
   function stop() {
     abortRef.current?.abort()
+  }
+
+  function clearConversation() {
+    setMessages([])
+    void clearMessages().catch(() => {})
   }
 
   function saveSettings() {
@@ -144,9 +181,16 @@ function ChatPage({ docs, messages, setMessages }: Props) {
       <div className="header">
         <div className="header-top">
           <h1>知识问答</h1>
-          <button type="button" className="ghost" onClick={() => setShowSettings((prev) => !prev)}>
-            模型设置{config ? ' · 已配置' : ''}
-          </button>
+          <div className="header-actions">
+            {messages.length > 0 && (
+              <button type="button" className="ghost" onClick={clearConversation}>
+                清空对话
+              </button>
+            )}
+            <button type="button" className="ghost" onClick={() => setShowSettings((prev) => !prev)}>
+              模型设置{config ? ' · 已配置' : ''}
+            </button>
+          </div>
         </div>
         <p className="subtitle">
           {docs.length > 0 ? `已加载 ${docs.length} 篇文档 · ` : ''}
@@ -226,8 +270,10 @@ function ChatPage({ docs, messages, setMessages }: Props) {
                   )}
                 </div>
                 {message.sources && message.sources.length > 0 && (
-                  <ul className="sources">
-                    {message.sources.map((source, index) => (
+                  <details className="sources-group">
+                    <summary>引用了 {message.sources.length} 个相关片段</summary>
+                    <ul className="sources">
+                      {message.sources.map((source, index) => (
                       <li key={source.id} className="source">
                         <div className="source-head">
                           <span className="source-index">[{index + 1}]</span>
@@ -241,7 +287,8 @@ function ChatPage({ docs, messages, setMessages }: Props) {
                         <p className="source-text">{source.text}</p>
                       </li>
                     ))}
-                  </ul>
+                    </ul>
+                  </details>
                 )}
               </div>
             ))
