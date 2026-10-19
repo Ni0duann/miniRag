@@ -418,26 +418,42 @@
   overflow: hidden;
 }
 
+/* 消息区滚动交给 AI Elements Conversation（use-stick-to-bottom），
+   这里只负责排版；padding 覆盖组件默认的 p-4 */
 .chat-body {
-  flex: 1;
-  min-height: 0;
-  padding: 22px;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 18px;
+  gap: 24px;
+  padding: 24px 26px;
 }
 
-.chat-empty {
-  margin: auto;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 12px;
-  max-width: 40ch;
-  text-align: center;
-  font-size: 14px;
+.typing-hint {
+  font-size: 13px;
   color: var(--text-soft);
+}
+
+.chat-error {
+  margin: 0 18px;
+}
+
+.sources-summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 7px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-soft);
+}
+
+.sources-summary:hover {
+  background: var(--hover, #ebebeb);
+  color: var(--text-h);
+}
+
+/* SourcesContent 默认 w-fit，引用卡片需要占满消息宽度 */
+.sources-content {
+  width: 100%;
+  max-width: none;
 }
 
 .link-btn {
@@ -453,45 +469,6 @@
 
 .link-btn:hover {
   background: var(--accent-hover);
-}
-
-.chat-msg {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  max-width: 85%;
-}
-
-.chat-msg.user {
-  align-self: flex-end;
-  align-items: flex-end;
-  max-width: 88%;
-}
-
-.chat-msg.assistant {
-  align-self: flex-start;
-  max-width: 96%;
-}
-
-.bubble {
-  padding: 10px 14px;
-  border-radius: 12px;
-  font-size: 15px;
-  line-height: 1.7;
-  white-space: pre-wrap;
-}
-
-.user .bubble {
-  border-bottom-right-radius: 4px;
-  background: var(--accent);
-  color: var(--on-accent);
-}
-
-.assistant .bubble {
-  border: 1px solid var(--border);
-  border-bottom-left-radius: 4px;
-  background: var(--surface-muted);
-  color: var(--text-h);
 }
 
 .sources {
@@ -545,47 +522,75 @@
 }
 
 .composer {
-  display: flex;
-  align-items: flex-end;
-  gap: 10px;
-  padding: 14px 18px;
+  padding: 12px 18px 16px;
   border-top: 1px solid var(--border);
   background: var(--surface);
 }
 
-.composer textarea {
-  flex: 1;
-  min-height: 48px;
-  max-height: 200px;
-  padding: 10px 12px;
-  resize: none;
+/* 输入区与操作行合并在同一个圆角容器里：按钮不再和 textarea 比高度，
+   多行输入时容器整体长高，按钮位置保持不动 */
+.composer-box {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 11px 10px 8px 12px;
   border: 1px solid var(--border-strong);
-  border-radius: 10px;
-  background: var(--surface-muted);
-  font: inherit;
-  font-size: 14px;
-  line-height: 1.5;
-  color: var(--text-h);
+  border-radius: 12px;
+  background: var(--surface);
+  transition:
+    border-color 120ms ease,
+    box-shadow 120ms ease;
 }
 
-.composer textarea::placeholder {
-  color: var(--text-soft);
-}
-
-.composer textarea:focus {
-  outline: none;
+.composer-box:focus-within {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
+.composer-input {
+  width: 100%;
+  min-height: 21px;
+  max-height: 140px;
+  padding: 0;
+  border: none;
+  resize: none;
+  background: transparent;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text-h);
+  /* Chrome 系按内容自动长高；不支持的浏览器停在单行内部滚动，不影响发送 */
+  field-sizing: content;
+}
+
+.composer-input:focus {
+  outline: none;
+}
+
+.composer-input::placeholder {
+  color: var(--text-soft);
+}
+
+.composer-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.composer-hint {
+  margin-right: auto;
+  font-size: 12px;
+  color: var(--text-soft);
+}
+
 .send {
-  height: 44px;
+  height: 30px;
   flex-shrink: 0;
-  padding: 0 18px;
-  border-radius: 10px;
+  padding: 0 14px;
+  border-radius: 8px;
   background: var(--accent);
   color: var(--on-accent);
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
 }
 
@@ -778,49 +783,9 @@
   }
 }
 
-/* 对话体验优化：来源折叠 + 头部操作组 */
+/* 对话体验优化：头部操作组 */
 .header-actions {
   display: flex;
   align-items: center;
   gap: 8px;
-}
-
-.sources-group {
-  width: 100%;
-}
-
-.sources-group summary {
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 8px;
-  border-radius: 7px;
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--text-soft);
-  list-style: none;
-}
-
-.sources-group summary::-webkit-details-marker {
-  display: none;
-}
-
-.sources-group summary::before {
-  content: '▸';
-  font-size: 10px;
-  transition: transform 0.15s ease;
-}
-
-.sources-group[open] summary::before {
-  transform: rotate(90deg);
-}
-
-.sources-group summary:hover {
-  background: var(--surface-muted);
-  color: var(--accent);
-}
-
-.sources-group[open] .sources {
-  margin-top: 8px;
 }

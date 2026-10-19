@@ -1,15 +1,23 @@
-import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { hybridSearch } from '../rag/search'
-import { buildMessages, loadLlmConfig, saveLlmConfig, streamAnswer, type LlmConfig } from '../rag/answer'
-import { clearMessages, putMessage } from '../rag/db'
+import { useChat } from '@ai-sdk/react'
+import type { UIMessage } from 'ai'
+import {
+  Conversation,
+  ConversationContent,
+  ConversationEmptyState,
+  ConversationScrollButton,
+} from '@/components/ai-elements/conversation'
+import { Message, MessageContent, MessageResponse } from '@/components/ai-elements/message'
+import { Sources, SourcesContent, SourcesTrigger } from '@/components/ai-elements/sources'
+import { createRagTransport, type SourcesData } from '../rag/chatTransport'
+import { loadLlmConfig, saveLlmConfig, type LlmConfig } from '../rag/answer'
+import { clearMessages, loadMessages, putMessage } from '../rag/db'
 import { fileBadge } from '../docs'
 import type { ChatMessage, Doc } from '../types'
 
 type Props = {
   docs: Doc[]
-  messages: ChatMessage[]
-  setMessages: Dispatch<SetStateAction<ChatMessage[]>>
 }
 
 function ChatIcon() {
@@ -33,132 +41,118 @@ function formatScore(score: number): string {
   return Number.isInteger(score) ? String(score) : score.toFixed(4)
 }
 
+// useChat 的 parts 是开放联合类型，这里按约定取 text / data-sources 两类
+function messageText(message: UIMessage): string {
+  return message.parts
+    .filter((part): part is { type: 'text'; text: string } => part.type === 'text')
+    .map((part) => part.text)
+    .join('')
+}
+
+// 默认 UIMessage 的 parts 是宽联合，data-sources 需要我们自己的收窄
+type SourcesPart = { type: 'data-sources'; data: SourcesData }
+
+function isSourcesPart(part: UIMessage['parts'][number]): part is SourcesPart {
+  return part.type === 'data-sources'
+}
+
+function messageSources(message: UIMessage): SourcesData | undefined {
+  return message.parts.find(isSourcesPart)?.data
+}
+
+// 从 IndexedDB 的扁平 ChatMessage 重建 useChat 需要的 UIMessage parts
+function toUIMessage(row: ChatMessage): UIMessage {
+  return {
+    id: row.id,
+    role: row.role,
+    parts: [
+      { type: 'text', text: row.text },
+      ...(row.sources ? [{ type: 'data-sources' as const, data: row.sources }] : []),
+    ],
+  }
+}
+
 // DeepSeek 官方 OpenAI 兼容端点；V4 系列 API 调用名为 deepseek-v4-flash（旧名 deepseek-chat 已停用）
 const DEFAULT_BASE_URL = 'https://api.deepseek.com/v1'
 const DEFAULT_MODEL = 'deepseek-v4-flash'
 
-function ChatPage({ docs, messages, setMessages }: Props) {
+// 模块级快照：transport 只在「发送那一刻」读最新文档列表。
+// 用普通变量而非 ref/可变 state，既避开渲染期触碰 ref，也不违反 React Compiler 的不可变假设
+//（全站只有 ChatPage 挂载时读写，StrictMode 双挂载写的是同一份 docs）
+let docsSnapshot: Doc[] = []
+
+function ChatPage({ docs }: Props) {
   const [draft, setDraft] = useState('')
-  const [searching, setSearching] = useState(false)
-  const [generating, setGenerating] = useState(false)
   const [config, setConfig] = useState<LlmConfig | null>(() => loadLlmConfig())
   const [showSettings, setShowSettings] = useState(false)
   const [baseUrl, setBaseUrl] = useState(() => loadLlmConfig()?.baseUrl ?? DEFAULT_BASE_URL)
   const [apiKey, setApiKey] = useState(() => loadLlmConfig()?.apiKey ?? '')
   const [model, setModel] = useState(() => loadLlmConfig()?.model ?? DEFAULT_MODEL)
-  const bodyRef = useRef<HTMLDivElement>(null)
-  const abortRef = useRef<AbortController | null>(null)
 
   useEffect(() => {
-    const body = bodyRef.current
-    if (body) body.scrollTop = body.scrollHeight
-  }, [messages])
+    docsSnapshot = docs
+  }, [docs])
+  // transport 只建一次，useChat 持有的实例保持稳定
+  const [transport] = useState(() => createRagTransport(() => docsSnapshot))
 
-  function appendToMessage(id: string, text: string) {
-    setMessages((prev) =>
-      prev.map((message) => (message.id === id ? { ...message, text: message.text + text } : message)),
-    )
+  // 已落库的消息 id：onFinish 时只补写新增的，避免整表反复 put
+  const persistedRef = useRef<Set<string>>(new Set())
+
+  const { messages, sendMessage, status, stop, setMessages, error } = useChat({
+    transport,
+    onFinish: ({ messages: settled, isError, isAbort }) => {
+      // 生成失败的那轮不落库：库里留一条空 assistant 会让刷新后看起来像「答了个空」，
+      // 而错误横幅只在内存里，用户无从知道这条空消息是怎么回事。中止（点停止）要保留，见 isAbort
+      if (isError && !isAbort) return
+      void persistMessages(settled)
+    },
+  })
+
+  const busy = status !== 'ready'
+
+  async function persistMessages(settled: UIMessage[]) {
+    // 同一批内用递增序号拉开 createdAt，保证刷新后 user 在 assistant 之前
+    let tick = 0
+    for (const message of settled) {
+      if (message.role === 'system' || persistedRef.current.has(message.id)) continue
+      persistedRef.current.add(message.id)
+      const row: ChatMessage = {
+        id: message.id,
+        role: message.role,
+        text: messageText(message),
+        sources: messageSources(message),
+        createdAt: Date.now() + tick++,
+      }
+      // 写库失败只影响"刷新后是否还在"，不打断对话
+      try {
+        await putMessage(row)
+      } catch {
+        // ignore
+      }
+    }
   }
 
-  async function send() {
+  useEffect(() => {
+    // 聊天记录恢复失败不阻塞页面：大不了从空对话开始
+    loadMessages()
+      .then((rows) => {
+        if (rows.length === 0) return
+        rows.forEach((row) => persistedRef.current.add(row.id))
+        setMessages(rows.map(toUIMessage))
+      })
+      .catch(() => {})
+  }, [setMessages])
+
+  function send() {
     const question = draft.trim()
-    if (!question || searching || generating) return
-
+    if (!question || busy) return
     setDraft('')
-    const userMessage: ChatMessage = {
-      id: crypto.randomUUID(),
-      role: 'user',
-      text: question,
-      createdAt: Date.now(),
-    }
-    setMessages((prev) => [...prev, userMessage])
-    // 写库失败只影响"刷新后是否还在"，不打断本次对话
-    void putMessage(userMessage).catch(() => {})
-    setSearching(true)
-
-    let retrievalAnswer = ''
-    let sources: ChatMessage['sources']
-    try {
-      if (docs.length === 0) {
-        retrievalAnswer = '还没有可检索的文档，请先在「文档」页上传文件。'
-      } else {
-        const outcome = await hybridSearch(docs, question)
-        sources = outcome.results
-        if (outcome.results.length === 0) {
-          retrievalAnswer = '没有在已上传的文档中找到相关内容，试试换个关键词。'
-        } else if (!config) {
-          // 未配置模型时保持仅检索模式（Step 4 行为），并引导去设置
-          retrievalAnswer =
-            `检索到 ${outcome.results.length} 个相关片段（${outcome.mode === 'hybrid' ? '混合检索' : '关键词检索'}）。` +
-            `${outcome.mode === 'keyword' ? (outcome.reason ?? '') : ''}配置生成模型后，我会基于这些片段流式回答问题。`
-        }
-      }
-    } finally {
-      setSearching(false)
-    }
-
-    if (retrievalAnswer || !sources || sources.length === 0 || !config) {
-      const message: ChatMessage = {
-        id: crypto.randomUUID(),
-        role: 'assistant',
-        text: retrievalAnswer,
-        sources,
-        createdAt: Date.now(),
-      }
-      setMessages((prev) => [...prev, message])
-      void putMessage(message).catch(() => {})
-      return
-    }
-
-    // 检索命中且已配置模型：先落一条空的 assistant 消息，边收 delta 边填
-    const assistantId = crypto.randomUUID()
-    const createdAt = Date.now()
-    setMessages((prev) => [
-      ...prev,
-      { id: assistantId, role: 'assistant', text: '', sources, createdAt },
-    ])
-    setGenerating(true)
-    const controller = new AbortController()
-    abortRef.current = controller
-
-    // 全文在本地累计，结束时一次性写库：逐 delta 落库会高频打 IndexedDB 且没有收益
-    let fullText = ''
-    const persistFinal = () => {
-      void putMessage({ id: assistantId, role: 'assistant', text: fullText, sources, createdAt }).catch(
-        () => {},
-      )
-    }
-
-    await streamAnswer(
-      config,
-      buildMessages(question, sources),
-      {
-        onDelta: (delta) => {
-          fullText += delta
-          appendToMessage(assistantId, delta)
-        },
-        onDone: () => {
-          setGenerating(false)
-          persistFinal()
-        },
-        onError: (error) => {
-          const suffix = `\n\n（生成失败：${error.message}）`
-          fullText += suffix
-          appendToMessage(assistantId, suffix)
-          setGenerating(false)
-          persistFinal()
-        },
-      },
-      controller.signal,
-    )
-  }
-
-  function stop() {
-    abortRef.current?.abort()
+    void sendMessage({ text: question })
   }
 
   function clearConversation() {
     setMessages([])
+    persistedRef.current.clear()
     void clearMessages().catch(() => {})
   }
 
@@ -233,7 +227,12 @@ function ChatPage({ docs, messages, setMessages }: Props) {
               仅限本地学习用途，勿用于生产。
             </p>
             <div className="settings-actions">
-              <button type="button" className="link-btn" onClick={saveSettings} disabled={!baseUrl.trim() || !apiKey.trim() || !model.trim()}>
+              <button
+                type="button"
+                className="link-btn"
+                onClick={saveSettings}
+                disabled={!baseUrl.trim() || !apiKey.trim() || !model.trim()}
+              >
                 保存
               </button>
               {config && (
@@ -247,96 +246,128 @@ function ChatPage({ docs, messages, setMessages }: Props) {
       </div>
 
       <section className="panel chat-panel">
-        <div className="chat-body" ref={bodyRef}>
-          {messages.length === 0 ? (
-            <div className="chat-empty">
-              <span className="preview-icon">
-                <ChatIcon />
-              </span>
-              <p>输入问题，我会从已上传的文档中查找相关片段并生成回答。</p>
-              {docs.length === 0 && (
-                <Link to="/" className="link-btn">
-                  先上传文档
-                </Link>
-              )}
-            </div>
-          ) : (
-            messages.map((message) => (
-              <div key={message.id} className={`chat-msg ${message.role}`}>
-                <div className="bubble">
-                  {message.text}
-                  {generating && message.role === 'assistant' && message.id === lastAssistantId(messages) && (
-                    <span className="cursor" aria-hidden="true" />
-                  )}
-                </div>
-                {message.sources && message.sources.length > 0 && (
-                  <details className="sources-group">
-                    <summary>引用了 {message.sources.length} 个相关片段</summary>
-                    <ul className="sources">
-                      {message.sources.map((source, index) => (
-                      <li key={source.id} className="source">
-                        <div className="source-head">
-                          <span className="source-index">[{index + 1}]</span>
-                          <span className="md-badge">{fileBadge(source.docName)}</span>
-                          <span className="source-name">{source.docName}</span>
-                          {source.heading !== '正文' && (
-                            <span className="source-heading">· {source.heading}</span>
-                          )}
-                          <span className="source-score">相关度 {formatScore(source.score)}</span>
-                        </div>
-                        <p className="source-text">{source.text}</p>
-                      </li>
-                    ))}
-                    </ul>
-                  </details>
+        <Conversation className="chat-conversation">
+          <ConversationContent className="chat-body">
+            {messages.length === 0 ? (
+              <ConversationEmptyState
+                icon={<ChatIcon />}
+                title="开始提问"
+                description="输入问题，我会从已上传的文档中查找相关片段并生成回答。"
+              >
+                <span className="preview-icon">
+                  <ChatIcon />
+                </span>
+                <p>输入问题，我会从已上传的文档中查找相关片段并生成回答。</p>
+                {docs.length === 0 && (
+                  <Link to="/" className="link-btn">
+                    先上传文档
+                  </Link>
                 )}
-              </div>
-            ))
-          )}
-        </div>
+              </ConversationEmptyState>
+            ) : (
+              messages.map((message) => {
+                const text = messageText(message)
+                const sources = messageSources(message)
+                const streaming = status === 'streaming' && message.role === 'assistant'
+                return (
+                  <Message key={message.id} from={message.role}>
+                    <MessageContent>
+                      {message.role === 'assistant' ? (
+                        <>
+                          {text ? (
+                            <MessageResponse isAnimating={streaming}>{text}</MessageResponse>
+                          ) : null}
+                          {streaming && <span className="cursor" aria-hidden="true" />}
+                        </>
+                      ) : (
+                        text
+                      )}
+                    </MessageContent>
+                    {sources && sources.length > 0 && (
+                      <Sources>
+                        <SourcesTrigger count={sources.length}>
+                          <span className="sources-summary">引用了 {sources.length} 个相关片段</span>
+                        </SourcesTrigger>
+                        <SourcesContent className="sources-content">
+                          <ul className="sources">
+                            {sources.map((source, index) => (
+                              <li key={source.id} className="source">
+                                <div className="source-head">
+                                  <span className="source-index">[{index + 1}]</span>
+                                  <span className="md-badge">{fileBadge(source.docName)}</span>
+                                  <span className="source-name">{source.docName}</span>
+                                  {source.heading !== '正文' && (
+                                    <span className="source-heading">· {source.heading}</span>
+                                  )}
+                                  <span className="source-score">相关度 {formatScore(source.score)}</span>
+                                </div>
+                                <p className="source-text">{source.text}</p>
+                              </li>
+                            ))}
+                          </ul>
+                        </SourcesContent>
+                      </Sources>
+                    )}
+                  </Message>
+                )
+              })
+            )}
+            {status === 'submitted' && <p className="typing-hint">检索相关片段中…</p>}
+          </ConversationContent>
+          {messages.length > 0 && <ConversationScrollButton />}
+        </Conversation>
+
+        {error && (
+          <div className="alert chat-error" role="alert">
+            <ul>
+              <li>生成失败：{error.message}</li>
+            </ul>
+          </div>
+        )}
 
         <form
           className="composer"
           onSubmit={(event) => {
             event.preventDefault()
-            void send()
+            send()
           }}
         >
-          <textarea
-            value={draft}
-            onChange={(event) => setDraft(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter' && !event.shiftKey) {
-                event.preventDefault()
-                void send()
-              }
-            }}
-            rows={2}
-            placeholder={
-              searching ? '检索中，请稍候…' : '输入问题，Enter 发送，Shift + Enter 换行'
-            }
-            aria-label="输入问题"
-          />
-          {generating ? (
-            <button type="button" className="send" onClick={stop}>
-              停止
-            </button>
-          ) : (
-            <button type="submit" className="send" disabled={!draft.trim() || searching}>
-              {searching ? '检索中…' : '发送'}
-            </button>
-          )}
+          {/* Vercel 式输入框：外层圆角容器包住输入区与底部操作行，
+              按钮嵌在容器内，避免与多行输入框比高度 */}
+          <div className="composer-box">
+            <textarea
+              className="composer-input"
+              value={draft}
+              onChange={(event) => setDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' && !event.shiftKey) {
+                  event.preventDefault()
+                  send()
+                }
+              }}
+              rows={1}
+              placeholder="输入问题"
+              aria-label="输入问题"
+            />
+            <div className="composer-bar">
+              <span className="composer-hint">
+                {status === 'submitted' ? '检索相关片段中…' : 'Enter 发送 · Shift + Enter 换行'}
+              </span>
+              {status === 'streaming' ? (
+                <button type="button" className="send" onClick={stop}>
+                  停止
+                </button>
+              ) : (
+                <button type="submit" className="send" disabled={!draft.trim() || busy}>
+                  发送
+                </button>
+              )}
+            </div>
+          </div>
         </form>
       </section>
     </>
   )
-}
-
-function lastAssistantId(messages: ChatMessage[]): string | undefined {
-  for (let i = messages.length - 1; i >= 0; i -= 1) {
-    if (messages[i].role === 'assistant') return messages[i].id
-  }
-  return undefined
 }
 
 export default ChatPage

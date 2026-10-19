@@ -1,57 +1,110 @@
+/* Geist 可变字体随构建打包，不依赖外部 CDN */
+@import '@fontsource-variable/geist';
+@import '@fontsource-variable/geist-mono';
+@import 'tailwindcss';
+@import 'tw-animate-css';
+@import 'shadcn/tailwind.css';
+
+/* 暗色由 main.tsx 按系统偏好在 html 上挂 .dark，与旧 CSS 变量共用一套开关 */
+@custom-variant dark (&:is(.dark *));
+
 :root {
-  --bg: #f6f6f8;
+  /* 旧页面（UploadPage 等）沿用的语义变量 —— Vercel Geist 浅色色板：
+     背景 #fafafa、边框 #ebebeb、正文 #171717、主操作近黑 */
+  --bg: #fafafa;
   --surface: #ffffff;
-  --surface-muted: #f9f9fb;
-  --text: #57515f;
-  --text-h: #131118;
-  --text-soft: #8b8594;
-  --border: #e7e5ec;
-  --border-strong: #d6d2de;
-  --accent: #7c3aed;
-  --accent-hover: #6d28d9;
+  --surface-muted: #f2f2f2;
+  --text: #4d4d4d;
+  --text-h: #171717;
+  --text-soft: #666666;
+  --border: #ebebeb;
+  --border-strong: #d9d9d9;
+  --accent: #171717;
+  --accent-hover: #000000;
   --on-accent: #ffffff;
-  --accent-soft: rgba(124, 58, 237, 0.07);
-  --accent-border: rgba(124, 58, 237, 0.4);
-  --danger: #c02626;
-  --danger-soft: #fdf0f0;
-  --danger-border: #f4caca;
-  --shadow-sm: 0 1px 2px rgba(19, 17, 24, 0.05);
-  --mono: ui-monospace, 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+  --accent-soft: rgba(0, 0, 0, 0.05);
+  --accent-border: #d9d9d9;
+  --danger: #dc2626;
+  --danger-soft: #fef2f2;
+  --danger-border: #fecaca;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
+  --mono:
+    'Geist Mono Variable', ui-monospace, 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
   --sans:
-    -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB',
-    'Microsoft YaHei', sans-serif;
+    'Geist Variable', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
+    'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
 
   font: 16px/1.55 var(--sans);
-  letter-spacing: 0.01em;
+  letter-spacing: -0.01em;
   color: var(--text);
   background: var(--bg);
-  color-scheme: light dark;
+  color-scheme: light;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+
+  /* shadcn / AI Elements 主题（neutral 基底即 Geist 灰阶） */
+  --background: #fafafa;
+  --foreground: #171717;
+  --card: #ffffff;
+  --card-foreground: #171717;
+  --popover: #ffffff;
+  --popover-foreground: #171717;
+  --primary: #171717;
+  --primary-foreground: #ffffff;
+  --secondary: #f2f2f2;
+  --secondary-foreground: #171717;
+  --muted: #f2f2f2;
+  --muted-foreground: #666666;
+  /* shadcn 的 accent 是「悬停高亮底色」，与旧变量里「品牌色」语义不同，必须独立 */
+  --hover: #ebebeb;
+  --hover-foreground: #171717;
+  --destructive: #dc2626;
+  --input: #ebebeb;
+  --ring: #a3a3a3;
+  --radius: 0.625rem;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #121116;
-    --surface: #1a1920;
-    --surface-muted: #201f27;
-    --text: #a7a1b2;
-    --text-h: #f2f0f6;
-    --text-soft: #7b7587;
-    --border: #2c2a35;
-    --border-strong: #3b3846;
-    --accent: #a78bfa;
-    --accent-hover: #b9a4fb;
-    --on-accent: #17151c;
-    --accent-soft: rgba(167, 139, 250, 0.1);
-    --accent-border: rgba(167, 139, 250, 0.45);
-    --danger: #f87171;
-    --danger-soft: rgba(248, 113, 113, 0.1);
-    --danger-border: rgba(248, 113, 113, 0.3);
-    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
-  }
+.dark {
+  /* Geist 深色：背景 #0a0a0a、面板 #171717、文字 #ededed、主操作反白 */
+  --bg: #0a0a0a;
+  --surface: #171717;
+  --surface-muted: #1f1f1f;
+  --text: #a1a1a1;
+  --text-h: #ededed;
+  --text-soft: #8f8f8f;
+  --border: #262626;
+  --border-strong: #404040;
+  --accent: #ededed;
+  --accent-hover: #ffffff;
+  --on-accent: #0a0a0a;
+  --accent-soft: rgba(255, 255, 255, 0.08);
+  --accent-border: #404040;
+  --danger: #f87171;
+  --danger-soft: rgba(248, 113, 113, 0.1);
+  --danger-border: rgba(248, 113, 113, 0.3);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+
+  color-scheme: dark;
+
+  --background: #0a0a0a;
+  --foreground: #ededed;
+  --card: #171717;
+  --card-foreground: #ededed;
+  --popover: #171717;
+  --popover-foreground: #ededed;
+  --primary: #ededed;
+  --primary-foreground: #0a0a0a;
+  --secondary: #1f1f1f;
+  --secondary-foreground: #ededed;
+  --muted: #1f1f1f;
+  --muted-foreground: #8f8f8f;
+  --hover: #262626;
+  --hover-foreground: #ededed;
+  --destructive: #f87171;
+  --input: #262626;
+  --ring: #525252;
 }
 
 *,
@@ -99,4 +152,45 @@ button:focus-visible {
 
 ::selection {
   background: var(--accent-soft);
+}
+
+@theme inline {
+  --font-heading: var(--font-sans);
+  --font-sans: 'Geist Variable', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --font-mono: 'Geist Mono Variable', ui-monospace, 'SFMono-Regular', Consolas, monospace;
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--hover-foreground);
+  --color-accent: var(--hover);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --color-foreground: var(--foreground);
+  --color-background: var(--background);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+  html {
+    @apply font-sans;
+  }
 }

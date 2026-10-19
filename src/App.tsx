@@ -2,13 +2,12 @@ import { useEffect, useState } from 'react'
 import { Navigate, NavLink, Route, Routes } from 'react-router-dom'
 import ChatPage from './pages/ChatPage'
 import UploadPage from './pages/UploadPage'
-import { loadDocs, loadMessages } from './rag/db'
-import type { ChatMessage, Doc } from './types'
+import { loadDocs } from './rag/db'
+import type { Doc } from './types'
 import './App.css'
 
 function App() {
   const [docs, setDocs] = useState<Doc[]>([])
-  const [messages, setMessages] = useState<ChatMessage[]>([])
   // 隐私模式或旧浏览器可能打不开 IndexedDB，此时降级为纯内存并明确告知
   const [storageWarning, setStorageWarning] = useState<string | null>(null)
 
@@ -31,13 +30,6 @@ function App() {
     return () => {
       cancelled = true
     }
-  }, [])
-
-  useEffect(() => {
-    // 聊天记录恢复失败不阻塞页面：大不了从空对话开始
-    loadMessages()
-      .then((restored) => setMessages((prev) => (prev.length === 0 ? restored : prev)))
-      .catch(() => {})
   }, [])
 
   return (
@@ -77,7 +69,7 @@ function App() {
         <Route index element={<UploadPage docs={docs} setDocs={setDocs} />} />
         <Route
           path="/chat"
-          element={<ChatPage docs={docs} messages={messages} setMessages={setMessages} />}
+          element={<ChatPage docs={docs} />}
         />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
