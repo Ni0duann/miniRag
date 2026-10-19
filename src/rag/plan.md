@@ -118,6 +118,19 @@ src/rag/
   - 持久化：页面 reload 后 docs=2 / chunks=12 / vectors=12 完整恢复
   - 模型重载：reload 后首次 `embedQuery`（含 Worker 创建 + 模型加载 + 编码）1.2s 完成，同源 `public/models` 由本地磁盘直接命中
   - 断网说明：改同源托管后"断网重进"退化为页面本身不可达（GitHub Pages 无 Service Worker 离线缓存）；如需真离线，后续加 SW 预缓存，不影响当前链路
+- [x] **Step 8 排队卡死加固**（线上诊断结论：串行队列排头挂起 → 后续文档永远「排队中」）
+  - 诊断复盘：Pages 对模型文件只发 `Cache-Control: max-age=600`，24MB 权重每 10 分钟/刷新就整包重下；
+    且 `allowRemoteModels=true` 时本地 404 会静默转 huggingface.co，国内网络下不报错也不推进，排头永久挂起拖死整条队列
+  - **A. 快速失败**：Worker 里给 `getExtractor()` 加 120s 超时（race），超时即抛「模型加载超时」→ 该文档显示「索引失败」，
+    队列继续跑后面的文档，用户可点「重试」；不再无限挂
+  - **B. 模型持久缓存**：实测发现 transformers.js v4.3.1 自带 Cache API 持久缓存（`env.useBrowserCache`，cache 名
+    `transformers-cache`，模型文件与 ort wasm 全部入缓存，不受 Pages `max-age=600` 影响）。
+    最终实现改为显式 `env.useBrowserCache = true`（弃用原定的 env.fetch 自包装，避免双份缓存）；
+    升级模型权重且文件名不变时需手动 `caches.delete('transformers-cache')`
+  - 验证（2026-10-19 dev 实测）：`transformers-cache` 共 6 条（4 个模型文件 + 2 个 ort wasm）；刷新后重新索引，
+    「排队中→已索引」全程 3.0s（加载模型仅 2.0s，无 24MB 重下）；另起独立 Worker 纯热路径 1.13s 出结果。
+    超时路径未实测（本地模型必在、无法构造 404 挂起源），逻辑为 race + 明确报错，构建与 lint 通过
+  - 风险：换模型/升级权重文件名不变时会命中旧缓存 → 需手动 `caches.delete('transformers-cache')` 整体失效
 
 ## 风险与回退
 

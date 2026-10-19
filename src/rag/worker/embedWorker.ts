@@ -26,6 +26,19 @@ try {
   // 拿不到 localStorage 就用默认 remoteHost
 }
 
+// ---------- Step 8-B：模型权重持久缓存 ----------
+// Pages 对静态文件只发 Cache-Control: max-age=600，24MB 权重过 10 分钟/刷新就可能整包重下，
+// 串行队列里表现为排头长时间「加载模型…」、后面的文档一直「排队中」。
+// transformers.js v4 自带 Cache API 持久缓存（cache 名 `transformers-cache`，模型文件与 ort wasm 都存），
+// 浏览器环境下默认可用即开启——显式置 true，让意图不依赖库的默认值演进。
+// 升级模型权重时若文件名不变会命中旧缓存，需在此 caches.delete('transformers-cache') 一次性清掉。
+env.useBrowserCache = true
+
+// ---------- Step 8-A：模型加载超时（快速失败，救活串行队列） ----------
+// allowRemoteModels 兜底时本地 404 会静默转 huggingface.co，国内网络下不报错也不推进，
+// 排头文档就此永久挂起、后续全部「排队中」。超时让请求明确失败进 error 态，队列继续跑。
+const MODEL_LOAD_TIMEOUT_MS = 120_000
+
 type FeatureExtractor = (
   texts: string[],
   options: { pooling: string; normalize: boolean },
@@ -56,6 +69,24 @@ function getExtractor(): Promise<FeatureExtractor> {
   return extractorPromise
 }
 
+/** 带看门狗的模型加载：超时只让本次请求失败，后台加载继续跑，成功后下一次重试直接命中 */
+async function getExtractorWithTimeout(): Promise<FeatureExtractor> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      getExtractor(),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`模型加载超过 ${MODEL_LOAD_TIMEOUT_MS / 1000} 秒，已判定失败（常见原因：网络卡在远程兜底源上）`)),
+          MODEL_LOAD_TIMEOUT_MS,
+        )
+      }),
+    ])
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 async function encodeBatch(extractor: FeatureExtractor, texts: string[]): Promise<Float32Array[]> {
   // bge 是 CLS 池化模型：取 [CLS] 向量并做 L2 归一化（归一化后余弦相似度 = 点积）
   const output = await extractor(texts, { pooling: 'cls', normalize: true })
@@ -71,7 +102,7 @@ async function handleRequest(id: number, texts: string[]): Promise<void> {
   ctx.postMessage({ type: 'phase', id, phase: 'loading' })
   let extractor: FeatureExtractor
   try {
-    extractor = await getExtractor()
+    extractor = await getExtractorWithTimeout()
   } catch (error) {
     // 最常见的失败原因是模型文件没下载，直接给出操作指引
     const reason = error instanceof Error ? error.message : '未知错误'
